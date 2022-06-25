@@ -1,0 +1,11 @@
+version: "3"
+
+services:
+  bflogger:
+    restart: unless-stopped
+    container_name: bflogger
+    image: xfilefin/bflogger:latest
+    environment:
+      - SERVER_GUID=4d0151b3-81ff-4268-b4e8-5e60d5bc8765
+      - DATABASE_URL=http://${DOCKER_GATEWAY_HOST:-host.docker.internal}:8086
+      - DATABASE_NAME=bflogger
