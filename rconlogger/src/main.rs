@@ -14,6 +14,8 @@ use tokio::time::sleep;
 struct ServerInfoReading {
     time: DateTime<Utc>,
     server_name: String,
+    #[influxdb(tag)]
+    server_name_tag: String,
     playercount: i32,
     max_playercount: i32,
     game_mode: String,
@@ -47,6 +49,7 @@ async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String) -> anyho
             let serverinfo_reading = ServerInfoReading {
                 time: Utc::now(),
                 server_name: data.server_name.to_string(),
+                server_name_tag: data.server_name.to_string(),
                 playercount: data.playercount,
                 max_playercount: data.max_playercount,
                 game_mode: data.game_mode.to_string(),
