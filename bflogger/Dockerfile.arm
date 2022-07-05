@@ -16,7 +16,7 @@ COPY ./bflogger/src ./src
 RUN cargo install --target aarch64-unknown-linux-gnu --path .
 
 # Bundle Stage
-FROM scratch
+FROM debian:buster-slim
 
 COPY --from=builder /usr/local/cargo/bin/bflogger .
 USER 1000
