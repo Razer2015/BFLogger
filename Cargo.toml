@@ -8,5 +8,6 @@ panic = 'abort'     # Abort on panic. Supposedly helps reduzing binary size.
 members = [
 	"battlelog",
 	"bflogger",
+	"rconlogger",
 	"companionapi",
 ]

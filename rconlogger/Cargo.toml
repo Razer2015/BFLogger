@@ -1,0 +1,15 @@
+[package]
+name = "rconlogger"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1.13", features = ["macros", "rt-multi-thread", "time"] }
+chrono = "0.4"
+influxdb = { version = "0.5.0", features = ["derive"] }
+dotenv = "0.15.0"
+anyhow = "1.0.58"
+
+battlefield_rcon = { git = "https://github.com/Kiiyya/BattleFox" }
