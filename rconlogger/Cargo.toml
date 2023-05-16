@@ -8,8 +8,17 @@ edition = "2018"
 [dependencies]
 tokio = { version = "1.13", features = ["macros", "rt-multi-thread", "time"] }
 chrono = "0.4"
+chrono-tz = { version = "0.4", features = ["serde"] }
 influxdb = { version = "0.5.0", features = ["derive"] }
 dotenv = "0.15.0"
 anyhow = "1.0.58"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1.0.64" }
+serde_yaml = "0.9.19"
+thiserror = "1.0.30"
 
-battlefield_rcon = { git = "https://github.com/Kiiyya/BattleFox" }
+battlefield_rcon = { git = "https://github.com/Razer2015/BattleFox" }
+
+# Logging
+log = "0.4"
+flexi_logger = { version = "0.17", features = ["colors"] }

@@ -1,0 +1,9 @@
+timezone: "Europe/Helsinki (test)"
+database_url: "http://localhost:8086 (test)"
+database_name: "bflogger (test)"
+update_interval: 1337
+servers:
+  - game_ip: "127.0.0.1"
+    game_port: "25200"
+    rcon_port: "47200"
+    unique_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"

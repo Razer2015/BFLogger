@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,10 +8,16 @@ use battlefield_rcon::bf4::Bf4Client;
 use battlefield_rcon::bf4::ServerInfoError;
 use anyhow::{anyhow};
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
+use configs::config_model::Configurations;
+use configs::config_model::ServerConfiguration;
 use dotenv::dotenv;
 use influxdb::Client;
 use influxdb::InfluxDbWriteable;
 use tokio::time::sleep;
+
+mod configs;
+mod logging;
 
 #[derive(InfluxDbWriteable)]
 struct ServerInfoReading {
@@ -37,14 +46,21 @@ struct ServerInfoReading {
     country: String,
     blaze_player_count: i32,
     blaze_game_state: String,
+    #[influxdb(tag)]
+    unique_id: String,
 }
 
-async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String) -> anyhow::Result<()> {
-    println!("Logging new server info entry for server {}", &addr);
+async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String, server: &ServerConfiguration) -> anyhow::Result<()> {
+    info!("Logging new server info entry for server {}", &addr);
 
     // Server info
     match bf4.server_info().await {
         Ok(data) => {
+            let mut game_ip_port = data.game_ip_and_port.to_string();
+            if game_ip_port.is_empty() {
+                game_ip_port = server.get_game_ip_port(&addr);
+            }
+
             // Let's write some data into a measurement called `serverinfo`
             let serverinfo_reading = ServerInfoReading {
                 time: Utc::now(),
@@ -53,7 +69,7 @@ async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String) -> anyho
                 playercount: data.playercount,
                 max_playercount: data.max_playercount,
                 game_mode: data.game_mode.to_string(),
-                map: data.map.to_string(),
+                map: data.map_original.to_string(),
                 rounds_played: data.rounds_played,
                 rounds_total: data.rounds_total,
                 online_state: data.online_state.to_string(),
@@ -62,7 +78,7 @@ async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String) -> anyho
                 has_gamepassword: data.has_gamepassword,
                 server_uptime: data.server_uptime,
                 roundtime: data.roundtime,
-                game_ip_and_port: data.game_ip_and_port.to_string(),
+                game_ip_and_port: game_ip_port,
                 punkbuster_version: data.punkbuster_version.to_string(),
                 join_queue_enabled: data.join_queue_enabled,
                 region: data.region.to_string(),
@@ -70,11 +86,12 @@ async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String) -> anyho
                 country: data.country.to_string(),
                 blaze_player_count: data.blaze_player_count,
                 blaze_game_state: data.blaze_game_state.to_string(),
+                unique_id: server.get_unique_id().to_string(),
             };
 
             let write_result = client.query(&serverinfo_reading.into_query("serverinfo")).await;
             if let Err(err) = write_result {
-                eprintln!("Error writing to db: {}", err)
+                error!("Error writing to db: {}", err)
             }
 
             Ok(())
@@ -85,27 +102,39 @@ async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String) -> anyho
     }
 }
 
+fn get_timezone(configurations: &Configurations) -> Tz {
+    let timezone = configurations.get_timezone();
+    timezone.parse().unwrap()
+}
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
+    logging::init_logging();
 
-    let database_url = dotenv::var("DATABASE_URL").unwrap_or("http://localhost:8086".to_string());
-    let database_name = dotenv::var("DATABASE_NAME").unwrap_or("bflogger".to_string());
-    let interval: u64 = dotenv::var("SERVER_INFO_INTERVAL")
-        .map(|var| var.parse::<u64>())
-        .unwrap_or(Ok(10000))
-        .unwrap();
+    info!("BFLogger starting");
+
+    let config = configs::config::load_configurations(format!("configs/{}.yaml", "production"))
+        .expect("Failed to load configurations file.");
+
+    info!("Using time zone: {}", get_timezone(&config).name());
+
+
+    let database_url = config.get_database_url();
+    let database_name = config.get_database_name();
+    let interval: u64 = config.get_server_info_interval();
     
-    let server_addresses = dotenv::var("SERVER_ADDRS")
-        .expect("Server addresses needed. Separate with comma (,) if multiple.");
-
     let mut jhs = Vec::new();
-    let split = server_addresses.split(",");
+    // let server_addresses = dotenv::var("SERVER_ADDRS")
+    //     .expect("Server addresses needed. Separate with comma (,) if multiple.");
+    // let split = server_addresses.split(",");
 
-    for s in split {
+    let servers = config.get_servers();
+
+    for server in servers {
         let url = database_url.clone();
         let name = database_name.clone();
-        let addr = String::from(s);
+
         jhs.push(tokio::spawn(async move {
             let max_connection_interval: u64 = 300;
             let mut connection_attempts: i32 = 1;
@@ -115,17 +144,17 @@ async fn main() {
             // Connection loop
             loop {
                 let connection = Bf4Client::connect_restricted(
-                    &addr,
+                    &server.get_game_ip_rcon_port(), false,
                 )
                 .await;
 
                 if connection.is_ok() {
                     bf4 = connection.unwrap();
-                    println!("Connected to {}", &addr);
+                    info!("Connected to {}", &server.get_game_ip_rcon_port());
                     break;
                 }
 
-                println!("Connection failed {}", &addr);
+                error!("Connection failed {} - {:#?}", &server.get_game_ip_rcon_port(), connection.unwrap_err());
                 connection_attempts += 1;
                 if connection_attempts % 10 == 0 {
                     connection_interval += 30;
@@ -140,33 +169,33 @@ async fn main() {
             // Connect to database
             let client = Client::new(url, name);
 
-            println!("Starting fetch loop for server {} with the interval of {}", &addr, interval);
+            info!("Starting fetch loop for server {} with the interval of {}", &server.get_game_ip_rcon_port(), interval);
 
             loop {
-                match log_new_entry(&client, &bf4, &addr).await {
+                match log_new_entry(&client, &bf4, &server.get_game_ip_rcon_port(), &server).await {
                     Err(err) => {
-                        println!("Reconnecting loop started for {} because of {}", &addr, err);
+                        warn!("Reconnecting loop started for {} because of {}", &server.get_game_ip_rcon_port(), err);
 
                         // Reconnect loop
                         connection_attempts = 1;
                         connection_interval = 0;
 
                         loop {
-                            println!("Attempt {} at trying to reconnect {}", connection_attempts, &addr);
+                            info!("Attempt {} at trying to reconnect {}", connection_attempts, &server.get_game_ip_rcon_port());
 
                             let connection = Bf4Client::connect_restricted(
-                                &addr,
+                                &server.get_game_ip_rcon_port(), false,
                             )
                             .await;
             
                             if connection.is_ok() {
                                 bf4 = connection.unwrap();
-                                println!("Reconnected to {}", &addr);
+                                info!("Reconnected to {}", &server.get_game_ip_rcon_port());
                                 sleep(Duration::from_secs(5)).await;
                                 break;
                             }
 
-                            println!("Reconnecting failed {}", &addr);
+                            error!("Reconnecting failed {} - {:#?}", &server.get_game_ip_rcon_port(), connection.unwrap_err());
                             connection_attempts += 1;
                             if connection_attempts % 10 == 0 {
                                 connection_interval += 30;
