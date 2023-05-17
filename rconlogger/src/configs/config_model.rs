@@ -5,7 +5,6 @@ pub struct Configurations {
     timezone: Option<String>,
     database_url: Option<String>,
     database_name: Option<String>,
-    update_interval: Option<u64>,
     servers: Option<Vec<ServerConfiguration>>,
 }
 
@@ -20,10 +19,6 @@ impl Configurations {
 
     pub fn get_database_name(&self) -> String {
         self.get_string(self.database_name.clone(), "DATABASE_NAME", "bflogger")
-    }
-
-    pub fn get_server_info_interval(&self) -> u64 {
-        self.get_u64(&self.update_interval, "SERVER_INFO_INTERVAL", 10000)
     }
 
     pub fn get_servers(&self) -> Vec<ServerConfiguration> {
@@ -43,7 +38,12 @@ impl Configurations {
                     game_ip: game_ip.to_string(),
                     game_port: None,
                     rcon_port: rcon_port.to_string(),
-                    unique_id: format!("{}:{}", game_ip, rcon_port)
+                    unique_id: format!("{}:{}", game_ip, rcon_port),
+
+                    update_interval: None,
+                    max_retry_connection_interval: None,
+                    retry_connection_step: None,
+                    retry_connection_addition: None,
                 })
             }
 
@@ -51,17 +51,6 @@ impl Configurations {
         }
         
         self.servers.as_ref().unwrap().clone()
-    }
-
-    fn get_u64(&self, setting: &Option<u64>, key: &str, fallback: u64) -> u64 {
-        if setting.is_none() {
-            return dotenv::var(key)
-                .map(|var| var.parse::<u64>())
-                .unwrap_or(Ok(fallback))
-                .unwrap();
-        }
-
-        setting.unwrap()
     }
 
     fn get_string(&self, setting: Option<String>, key: &str, fallback: &str) -> String {
@@ -79,6 +68,11 @@ pub struct ServerConfiguration {
     game_port: Option<String>,
     rcon_port: String,
     unique_id: String,
+
+    update_interval: Option<u64>,
+    max_retry_connection_interval: Option<u64>,
+    retry_connection_step: Option<i32>,
+    retry_connection_addition: Option<u64>,
 }
 
 impl ServerConfiguration {
@@ -96,5 +90,48 @@ impl ServerConfiguration {
 
     pub fn get_unique_id(&self) -> String {
         self.unique_id.clone()
+    }
+    
+    pub fn get_server_info_interval(&self) -> u64 {
+        self.get_u64_with_key_fallback(&self.update_interval, "SERVER_INFO_INTERVAL", 10000)
+    }
+
+    pub fn get_max_retry_connection_interval(&self) -> u64 {
+        self.get_u64_with_fallback(&self.max_retry_connection_interval, 300)
+    }
+
+    pub fn get_retry_connection_step(&self) -> i32 {
+        self.get_i32_with_fallback(&self.retry_connection_step, 10)
+    }
+
+    pub fn get_retry_connection_addition(&self) -> u64 {
+        self.get_u64_with_fallback(&self.retry_connection_addition, 30)
+    }
+
+    fn get_i32_with_fallback(&self, setting: &Option<i32>, fallback: i32) -> i32 {
+        if setting.is_none() {
+            return fallback;
+        }
+
+        setting.unwrap()
+    }
+
+    fn get_u64_with_fallback(&self, setting: &Option<u64>, fallback: u64) -> u64 {
+        if setting.is_none() {
+            return fallback;
+        }
+
+        setting.unwrap()
+    }
+
+    fn get_u64_with_key_fallback(&self, setting: &Option<u64>, key: &str, fallback: u64) -> u64 {
+        if setting.is_none() {
+            return dotenv::var(key)
+                .map(|var| var.parse::<u64>())
+                .unwrap_or(Ok(fallback))
+                .unwrap();
+        }
+
+        setting.unwrap()
     }
 }

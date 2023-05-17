@@ -14,6 +14,7 @@ use configs::config_model::ServerConfiguration;
 use dotenv::dotenv;
 use influxdb::Client;
 use influxdb::InfluxDbWriteable;
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 mod configs;
@@ -107,6 +108,97 @@ fn get_timezone(configurations: &Configurations) -> Tz {
     timezone.parse().unwrap()
 }
 
+fn serverinfo_task(server: ServerConfiguration) -> JoinHandle<()> {
+    let config = configs::config::load_configurations(format!("configs/{}.yaml", "production"))
+        .expect("Failed to load configurations file.");
+
+    let database_url = config.get_database_url();
+    let database_name = config.get_database_name();
+
+    let url = database_url.clone();
+    let name = database_name.clone();
+
+    tokio::spawn(async move {
+        let server_info_update_interval: u64 = server.get_server_info_interval();
+
+        let max_retry_connection_interval: u64 = server.get_max_retry_connection_interval();
+        let mut connection_attempts: i32 = 1;
+        let mut connection_interval: u64 = 0;
+        let mut bf4: Arc<Bf4Client>;
+
+        // Connection loop
+        loop {
+            let connection = Bf4Client::connect_restricted(
+                &server.get_game_ip_rcon_port(), false,
+            )
+            .await;
+
+            if connection.is_ok() {
+                bf4 = connection.unwrap();
+                info!("Connected to {}", &server.get_game_ip_rcon_port());
+                break;
+            }
+
+            error!("Connection failed {} - {:#?}", &server.get_game_ip_rcon_port(), connection.unwrap_err());
+            connection_attempts += 1;
+            if connection_attempts % server.get_retry_connection_step() == 0 {
+                connection_interval += server.get_retry_connection_addition();
+            }
+            if connection_interval >= max_retry_connection_interval {
+                connection_interval = max_retry_connection_interval;
+            }
+
+            sleep(Duration::from_secs(connection_interval)).await;
+        }
+
+        // Connect to database
+        let client = Client::new(url, name);
+
+        info!("Starting fetch loop for server {} with the server_info_update_interval of {}", &server.get_game_ip_rcon_port(), server_info_update_interval);
+
+        loop {
+            match log_new_entry(&client, &bf4, &server.get_game_ip_rcon_port(), &server).await {
+                Err(err) => {
+                    warn!("Reconnecting loop started for {} because of {}", &server.get_game_ip_rcon_port(), err);
+
+                    // Reconnect loop
+                    connection_attempts = 1;
+                    connection_interval = 0;
+
+                    loop {
+                        info!("Attempt {} at trying to reconnect {}", connection_attempts, &server.get_game_ip_rcon_port());
+
+                        let connection = Bf4Client::connect_restricted(
+                            &server.get_game_ip_rcon_port(), false,
+                        )
+                        .await;
+        
+                        if connection.is_ok() {
+                            bf4 = connection.unwrap();
+                            info!("Reconnected to {}", &server.get_game_ip_rcon_port());
+                            sleep(Duration::from_secs(5)).await;
+                            break;
+                        }
+
+                        error!("Reconnecting failed {} - {:#?}", &server.get_game_ip_rcon_port(), connection.unwrap_err());
+                        connection_attempts += 1;
+                        if connection_attempts % server.get_retry_connection_step() == 0 {
+                            connection_interval += server.get_retry_connection_addition();
+                        }
+                        if connection_interval >= max_retry_connection_interval {
+                            connection_interval = max_retry_connection_interval;
+                        }
+        
+                        sleep(Duration::from_secs(connection_interval)).await;
+                    }
+                },
+                Ok(_) => sleep(Duration::from_millis(server_info_update_interval)).await,
+            };
+            
+        }
+    })
+}
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
@@ -118,102 +210,29 @@ async fn main() {
         .expect("Failed to load configurations file.");
 
     info!("Using time zone: {}", get_timezone(&config).name());
-
-
-    let database_url = config.get_database_url();
-    let database_name = config.get_database_name();
-    let interval: u64 = config.get_server_info_interval();
     
     let mut jhs = Vec::new();
-    // let server_addresses = dotenv::var("SERVER_ADDRS")
-    //     .expect("Server addresses needed. Separate with comma (,) if multiple.");
-    // let split = server_addresses.split(",");
-
     let servers = config.get_servers();
 
     for server in servers {
-        let url = database_url.clone();
-        let name = database_name.clone();
-
         jhs.push(tokio::spawn(async move {
-            let max_connection_interval: u64 = 300;
-            let mut connection_attempts: i32 = 1;
-            let mut connection_interval: u64 = 0;
-            let mut bf4: Arc<Bf4Client>;
-
-            // Connection loop
             loop {
-                let connection = Bf4Client::connect_restricted(
-                    &server.get_game_ip_rcon_port(), false,
-                )
-                .await;
-
-                if connection.is_ok() {
-                    bf4 = connection.unwrap();
-                    info!("Connected to {}", &server.get_game_ip_rcon_port());
-                    break;
-                }
-
-                error!("Connection failed {} - {:#?}", &server.get_game_ip_rcon_port(), connection.unwrap_err());
-                connection_attempts += 1;
-                if connection_attempts % 10 == 0 {
-                    connection_interval += 30;
-                }
-                if connection_interval >= max_connection_interval {
-                    connection_interval = max_connection_interval;
-                }
-
-                sleep(Duration::from_secs(10)).await;
-            }
-
-            // Connect to database
-            let client = Client::new(url, name);
-
-            info!("Starting fetch loop for server {} with the interval of {}", &server.get_game_ip_rcon_port(), interval);
-
-            loop {
-                match log_new_entry(&client, &bf4, &server.get_game_ip_rcon_port(), &server).await {
-                    Err(err) => {
-                        warn!("Reconnecting loop started for {} because of {}", &server.get_game_ip_rcon_port(), err);
-
-                        // Reconnect loop
-                        connection_attempts = 1;
-                        connection_interval = 0;
-
-                        loop {
-                            info!("Attempt {} at trying to reconnect {}", connection_attempts, &server.get_game_ip_rcon_port());
-
-                            let connection = Bf4Client::connect_restricted(
-                                &server.get_game_ip_rcon_port(), false,
-                            )
-                            .await;
-            
-                            if connection.is_ok() {
-                                bf4 = connection.unwrap();
-                                info!("Reconnected to {}", &server.get_game_ip_rcon_port());
-                                sleep(Duration::from_secs(5)).await;
-                                break;
-                            }
-
-                            error!("Reconnecting failed {} - {:#?}", &server.get_game_ip_rcon_port(), connection.unwrap_err());
-                            connection_attempts += 1;
-                            if connection_attempts % 10 == 0 {
-                                connection_interval += 30;
-                            }
-                            if connection_interval >= max_connection_interval {
-                                connection_interval = max_connection_interval;
-                            }
-            
-                            sleep(Duration::from_secs(connection_interval)).await;
-                        }
+                let res = serverinfo_task(server.clone()).await;
+                match res {
+                    Ok(_output) => { break; },
+                    Err(err) if err.is_panic() => { 
+                        /* handle panic in task, e.g. by going around loop to restart task */
+                        error!("{}", err);
+                        sleep(Duration::from_millis(2000)).await;
+                     },
+                    Err(err) => { 
+                        /* handle other errors (mainly runtime shutdown) */
+                        error!("{}", err);
+                        sleep(Duration::from_millis(2000)).await;
                     },
-                    Ok(_) => sleep(Duration::from_millis(interval)).await,
-                };
-                
+                }
             }
         }));
-
-        sleep(Duration::from_millis(2000)).await;
     }
 
     // Wait for all our spawned tasks to finish.

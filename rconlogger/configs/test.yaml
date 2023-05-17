@@ -1,9 +1,15 @@
 timezone: "Europe/Helsinki (test)"
 database_url: "http://localhost:8086 (test)"
 database_name: "bflogger (test)"
-update_interval: 1337
 servers:
   - game_ip: "127.0.0.1"
     game_port: "25200"
     rcon_port: "47200"
     unique_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    update_interval: 1337
+    max_retry_connection_interval: 1338
+    retry_connection_step: 15
+    retry_connection_addition: 1339
+  - game_ip: "0.0.0.0"
+    rcon_port: "47201"
+    unique_id: "axxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
