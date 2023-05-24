@@ -52,7 +52,7 @@ struct ServerInfoReading {
 }
 
 async fn log_new_entry(client: &Client, bf4: &Bf4Client, addr: &String, server: &ServerConfiguration) -> anyhow::Result<()> {
-    info!("Logging new server info entry for server {}", &addr);
+    trace!("Logging new server info entry for server {}", &addr);
 
     // Server info
     match bf4.server_info().await {
